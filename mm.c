@@ -66,6 +66,9 @@ team_t team = {
 #define HDRP(bp) ((char *)(bp) - WSIZE)
 #define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
 
+#define PRED(bp) ((char *)(bp))
+#define SUCC(bp) ((char *)(bp) + WSIZE)
+
 // 다음과 이전 블록의 블록 포인터를 각각 return
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
@@ -75,7 +78,7 @@ team_t team = {
  */
 
 // 항상 첫번째 사용가능한 블록을 가리키는 포인터
-static char *heap_listp;
+static char *heap_free_header;
 
 // 가용 블록 연결
 static void *coalesce(void *bp)
@@ -96,7 +99,8 @@ static void *coalesce(void *bp)
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
 
         // 바뀐 size로 현재 블록의 header와 footer 수정
-        // 다음 블록의 footer을 바꿔야하지 않나?
+        // 다음 블록의 footer을 바꿔야하지 않나? 
+        //     -> 이미 합쳐져서 bp의 footer가 다음 블록의 footer와 동일
         PUT(HDRP(bp), PACK(size, 0));
         PUT(FTRP(bp), PACK(size, 0));
     }
@@ -111,7 +115,11 @@ static void *coalesce(void *bp)
         PUT(FTRP(bp), PACK(size, 0));
 
         // 현재 노드를 이전 노드로 바꿈
+        void *origin_bp = bp;
         bp = PREV_BLKP(bp);
+
+        PUT(bp, NULL);
+        PUT(bp, *((char *)origin_bp + WSIZE));
     }
 
     // 이전 블록과 다음 블록 둘 다 가용 블록인 경우
@@ -124,7 +132,12 @@ static void *coalesce(void *bp)
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
 
         // 현재 노드를 이전 노드로 바꿈
+        void *origin_bp = bp;
         bp = PREV_BLKP(bp);
+
+        // 이전 블록의 predecessor, 다음 블록의 successor 계승
+        PUT_POINTER(bp, '\0');
+        PUT_POINTER(bp + WSIZE, GET(origin_bp + WSIZE));
     }
 
     return bp;
@@ -143,8 +156,9 @@ static void *extend_heap(size_t words)
     PUT(HDRP(bp), PACK(size, 0)); 
     PUT(FTRP(bp), PACK(size, 0));
 
-    // 새로운 epilogue header 
-    PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));
+    // 가용 블록의 prodecessor와 successor 초기화
+    PUT_POINTER(bp, '\0'); 
+    PUT_POINTER(bp + WSIZE, '\0');
 
     // 이전 블록이 가용 블록이면 연결
     return coalesce(bp);
@@ -152,20 +166,18 @@ static void *extend_heap(size_t words)
 
 int mm_init(void)
 {
-    // heap_listp 초기화
-    if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1) return -1;
+    // heap_free_header 초기화
+    if ((heap_free_header = mem_sbrk(2 * WSIZE)) == (void *)-1) return -1;
 
-    // 첫번째 미사용 padding 블록 초기화
-    PUT(heap_listp, 0);
+    // header와 footer 초기화
+    PUT(heap_free_header, PACK(DSIZE, 0));
+    PUT(heap_free_header + (3 * WSIZE), PACK(DSIZE, 0));
 
-    // prologue 블록 초기화
-    PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, 1));
-    PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1));
+    // predecessor와 successor 초기화
+    PUT_POINTER(heap_free_header + (1 * WSIZE), '\0');
+    PUT_POINTER(heap_free_header + (2 * WSIZE), '\0');
     
-    // epilogue 블록 초기화
-    PUT(heap_listp + (3 * WSIZE), PACK(0, 1));
-
-    heap_listp += (2 * WSIZE);
+    heap_free_header += WSIZE;
 
     // 성공 여부에 따라 return
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL) return -1;
@@ -175,14 +187,13 @@ int mm_init(void)
 // first fit으로 가용 블록 탐색
 static void *find_fit(size_t asize)
 {
-    // bp를 첫 블록으로 초기화
-    void *bp = heap_listp;
+    // bp를 첫 가용 블록으로 초기화
+    void *bp = heap_free_header;
 
     // size가 0인 블록을 만나기 전까지 = epilogue를 만나기 전까지 = 가용 리스트 끝까지 갈 때까지
-    while (GET_SIZE(HDRP(bp)) > 0) {
+    while (bp != NULL) {
         // 현재 블록이 할당 받은 블록이거나 블록 size가 필요한 size보다 작으면 다음 블록으로 점프
-        if (GET_ALLOC(HDRP(bp)) == 1 || GET_SIZE(HDRP(bp)) < asize) 
-            bp = NEXT_BLKP(bp);
+        if (GET_SIZE(HDRP(bp)) < asize) (char *)bp = GET_POINTER(SUCC(bp));
         
         // 현재 블록이 필요한 size를 담을 수 있는 가용 블록이면 블록 주소 return
         else return bp;
@@ -206,6 +217,10 @@ static void place(void *bp, size_t asize)
         // 전체 크기를 모두 할당
         PUT(HDRP(bp), PACK(csize, 1));
         PUT(FTRP(bp), PACK(csize, 1));
+
+        // 가용 블록 연결 리스트에서 삭제
+        PUT(GET(bp) + WSIZE, GET(bp + WSIZE));
+        PUT(GET(bp + WSIZE), GET(bp));
     }
 
     // 남은 크기가 최소 블록 크기보다 크거나 같으면
@@ -214,10 +229,19 @@ static void place(void *bp, size_t asize)
         PUT(HDRP(bp), PACK(asize, 1));
         PUT(FTRP(bp), PACK(asize, 1));
 
+        // 가용 블록 연결 리스트에서 삭제
+        PUT(GET(bp) + WSIZE, GET(bp + WSIZE));
+        PUT(GET(bp + WSIZE), GET(bp));
+
         // 남은 크기를 가용블록으로 만듬
         bp = NEXT_BLKP(bp);
         PUT(HDRP(bp), PACK(remain, 0));
         PUT(FTRP(bp), PACK(remain, 0));
+
+        // 새로 생긴 가용 블록을 가용 블록 리스트 맨 앞에 연결
+        PUT(bp, NULL);
+        UT(bp + WSIZE, heap_free_header);
+        heap_free_header = bp;
     }
 }
 
@@ -269,6 +293,11 @@ void mm_free(void *bp)
     // header와 footer의 할당 비트를 변경
     PUT(HDRP(bp), PACK(size, 0));
     PUT(FTRP(bp), PACK(size, 0));
+
+    // 새로 생긴 가용 블록을 가용 블록 리스트 맨 앞에 연결
+    PUT(bp, NULL);
+    PUT(bp + WSIZE, heap_free_header);
+    heap_free_header = bp;    
 
     // 앞뒤 블록과 연결 -> 즉시 연결
     coalesce(bp);
