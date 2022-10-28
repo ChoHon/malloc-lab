@@ -72,9 +72,13 @@ team_t team = {
 // 항상 첫번째 사용가능한 블록을 가리키는 포인터
 static char *heap_listp = NULL;
 
+char *end_point = NULL;
+
 static void *extend_heap(size_t words);
 static void *coalesce(void *bp);
-static void *find_fit(size_t asize);
+static void *first_fit(size_t asize);
+static void *next_fit(size_t asize);
+static void *best_fit(size_t asize);
 static void place(void *bp, size_t asize);
 
 /*
@@ -97,6 +101,8 @@ int mm_init(void)
     PUT(heap_listp + (3 * WSIZE), PACK(0, 1));
 
     heap_listp += (2 * WSIZE);
+
+    end_point = heap_listp;
 
     // 성공 여부에 따라 return
     if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
@@ -127,10 +133,11 @@ void *mm_malloc(size_t size)
         asize = DSIZE * ((size + (DSIZE - 1) + (DSIZE)) / DSIZE);
 
     // asize를 수용할 수 있는 가용 블록을 찾으면
-    if ((bp = find_fit(asize)) != NULL)
+    if ((bp = next_fit(asize)) != NULL)
     {
         // 메모리를 할당하고 bp return
         place(bp, asize);
+        end_point = bp;
         return bp;
     }
 
@@ -144,6 +151,7 @@ void *mm_malloc(size_t size)
 
     // heap 추가 요청 성공시 메모리를 할당하고 bp return
     place(bp, asize);
+    end_point = bp;
     return bp;
 }
 
@@ -220,7 +228,10 @@ static void *coalesce(void *bp)
 
     // 이전 블록과 다음 블록 모두 할당되어 있는 경우
     if (prev_alloc && next_alloc)
+    {
+        end_point = bp;
         return bp;
+    }
 
     // 다음 블록만 가용 블록인 경우
     else if (prev_alloc && !next_alloc)
@@ -262,11 +273,12 @@ static void *coalesce(void *bp)
         bp = PREV_BLKP(bp);
     }
 
+    end_point = bp;
     return bp;
 }
 
 // first fit으로 가용 블록 탐색
-static void *find_fit(size_t asize)
+static void *first_fit(size_t asize)
 {
     // bp를 첫 블록으로 초기화
     void *bp = heap_listp;
@@ -285,6 +297,32 @@ static void *find_fit(size_t asize)
 
     // 현재 heap에 필요한 size를 담을 수 있는 가용 블록이 없으면 NULL return
     return NULL;
+}
+
+// next fit으로 가용 블록 탐색
+static void *next_fit(size_t asize)
+{
+    char *bp = NEXT_BLKP(end_point);
+    for (; bp != end_point; bp = NEXT_BLKP(bp))
+    {
+        if (GET_SIZE(HDRP(bp)) == 0)
+        {
+            bp = heap_listp;
+            continue;
+        }
+        if (GET_ALLOC(HDRP(bp)) == 0 && GET_SIZE(HDRP(bp)) >= asize)
+            return bp;
+    }
+
+    if (GET_ALLOC(HDRP(bp)) == 0 && GET_SIZE(HDRP(bp)) >= asize)
+        return bp;
+
+    return NULL;
+}
+
+// best fit으로 가용 블록 탐색
+static void *best_fit(size_t asize)
+{
 }
 
 // 가용 블록에서 적당한 크기의 블록 할당
