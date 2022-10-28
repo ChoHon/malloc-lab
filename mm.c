@@ -66,8 +66,8 @@ team_t team = {
 #define HDRP(bp) ((char *)(bp) - WSIZE)
 #define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
 
-#define PRED(bp) ((char *)(bp))
-#define SUCC(bp) ((char *)(bp) + WSIZE)
+#define PRED(bp) (*(void **)(bp))
+#define SUCC(bp) (*(void **)(bp + WSIZE))
 
 // 다음과 이전 블록의 블록 포인터를 각각 return
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
@@ -78,7 +78,7 @@ team_t team = {
  */
 
 // 항상 첫번째 사용가능한 블록을 가리키는 포인터
-static char *heap_free_header;
+static char *free_list_header = NULL;
 
 // 가용 블록 연결
 static void *coalesce(void *bp)
@@ -118,8 +118,9 @@ static void *coalesce(void *bp)
         void *origin_bp = bp;
         bp = PREV_BLKP(bp);
 
-        PUT(bp, NULL);
-        PUT(bp, *((char *)origin_bp + WSIZE));
+        PRED(bp) = NULL;
+        SUCC(bp) = SUCC(origin_bp);
+        free_list_header = bp;
     }
 
     // 이전 블록과 다음 블록 둘 다 가용 블록인 경우
@@ -136,8 +137,9 @@ static void *coalesce(void *bp)
         bp = PREV_BLKP(bp);
 
         // 이전 블록의 predecessor, 다음 블록의 successor 계승
-        PUT_POINTER(bp, '\0');
-        PUT_POINTER(bp + WSIZE, GET(origin_bp + WSIZE));
+        PRED(bp) = NULL;
+        SUCC(bp) = SUCC(origin_bp);
+        free_list_header = bp;
     }
 
     return bp;
@@ -157,8 +159,8 @@ static void *extend_heap(size_t words)
     PUT(FTRP(bp), PACK(size, 0));
 
     // 가용 블록의 prodecessor와 successor 초기화
-    PUT_POINTER(bp, '\0'); 
-    PUT_POINTER(bp + WSIZE, '\0');
+    PRED(bp) = NULL;
+    SUCC(bp) = NULL;
 
     // 이전 블록이 가용 블록이면 연결
     return coalesce(bp);
@@ -167,17 +169,16 @@ static void *extend_heap(size_t words)
 int mm_init(void)
 {
     // heap_free_header 초기화
-    if ((heap_free_header = mem_sbrk(2 * WSIZE)) == (void *)-1) return -1;
+    if ((free_list_header = mem_sbrk(2 * WSIZE)) == (void *)-1) return -1;
 
     // header와 footer 초기화
-    PUT(heap_free_header, PACK(DSIZE, 0));
-    PUT(heap_free_header + (3 * WSIZE), PACK(DSIZE, 0));
+    PUT(free_list_header, PACK(DSIZE, 0));
+    PUT(free_list_header + (3 * WSIZE), PACK(DSIZE, 0));
 
-    // predecessor와 successor 초기화
-    PUT_POINTER(heap_free_header + (1 * WSIZE), '\0');
-    PUT_POINTER(heap_free_header + (2 * WSIZE), '\0');
-    
-    heap_free_header += WSIZE;
+    // predecessor와 successor 초기화   
+    free_list_header += WSIZE;
+    PRED(free_list_header) = NULL;
+    SUCC(free_list_header) = NULL;
 
     // 성공 여부에 따라 return
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL) return -1;
@@ -188,12 +189,12 @@ int mm_init(void)
 static void *find_fit(size_t asize)
 {
     // bp를 첫 가용 블록으로 초기화
-    void *bp = heap_free_header;
+    void *bp = free_list_header;
 
     // size가 0인 블록을 만나기 전까지 = epilogue를 만나기 전까지 = 가용 리스트 끝까지 갈 때까지
     while (bp != NULL) {
         // 현재 블록이 할당 받은 블록이거나 블록 size가 필요한 size보다 작으면 다음 블록으로 점프
-        if (GET_SIZE(HDRP(bp)) < asize) (char *)bp = GET_POINTER(SUCC(bp));
+        if (GET_SIZE(HDRP(bp)) < asize) bp = SUCC(bp);
         
         // 현재 블록이 필요한 size를 담을 수 있는 가용 블록이면 블록 주소 return
         else return bp;
@@ -219,8 +220,8 @@ static void place(void *bp, size_t asize)
         PUT(FTRP(bp), PACK(csize, 1));
 
         // 가용 블록 연결 리스트에서 삭제
-        PUT(GET(bp) + WSIZE, GET(bp + WSIZE));
-        PUT(GET(bp + WSIZE), GET(bp));
+        SUCC(PRED(bp)) = SUCC(bp);
+        PRED(SUCC(bp)) = PRED(bp);
     }
 
     // 남은 크기가 최소 블록 크기보다 크거나 같으면
@@ -230,8 +231,8 @@ static void place(void *bp, size_t asize)
         PUT(FTRP(bp), PACK(asize, 1));
 
         // 가용 블록 연결 리스트에서 삭제
-        PUT(GET(bp) + WSIZE, GET(bp + WSIZE));
-        PUT(GET(bp + WSIZE), GET(bp));
+        SUCC(PRED(bp)) = SUCC(bp);
+        PRED(SUCC(bp)) = PRED(bp);
 
         // 남은 크기를 가용블록으로 만듬
         bp = NEXT_BLKP(bp);
@@ -239,9 +240,9 @@ static void place(void *bp, size_t asize)
         PUT(FTRP(bp), PACK(remain, 0));
 
         // 새로 생긴 가용 블록을 가용 블록 리스트 맨 앞에 연결
-        PUT(bp, NULL);
-        UT(bp + WSIZE, heap_free_header);
-        heap_free_header = bp;
+        PRED(bp) = NULL;
+        SUCC(bp) = free_list_header;
+        free_list_header = bp;
     }
 }
 
@@ -295,9 +296,9 @@ void mm_free(void *bp)
     PUT(FTRP(bp), PACK(size, 0));
 
     // 새로 생긴 가용 블록을 가용 블록 리스트 맨 앞에 연결
-    PUT(bp, NULL);
-    PUT(bp + WSIZE, heap_free_header);
-    heap_free_header = bp;    
+    PRED(bp) = NULL;
+    SUCC(bp) = free_list_header;
+    free_list_header = bp;
 
     // 앞뒤 블록과 연결 -> 즉시 연결
     coalesce(bp);
