@@ -312,7 +312,7 @@ static void *first_fit(size_t asize)
 static void *best_fit(size_t asize)
 {
     char *best_bp = NULL;
-    size_t best = (1 << 32) - 1;
+    size_t best = __SIZE_MAX__;
 
     for (char *bp = free_list_header; GET_ALLOC(HDRP(bp)) == 0; bp = SUCC(bp))
     {
