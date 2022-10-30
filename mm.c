@@ -133,7 +133,7 @@ void *mm_malloc(size_t size)
         asize = DSIZE * ((size + (DSIZE - 1) + (DSIZE)) / DSIZE);
 
     // asize를 수용할 수 있는 가용 블록을 찾으면
-    if ((bp = next_fit(asize)) != NULL)
+    if ((bp = best_fit(asize)) != NULL)
     {
         // 메모리를 할당하고 bp return
         place(bp, asize);
@@ -323,6 +323,28 @@ static void *next_fit(size_t asize)
 // best fit으로 가용 블록 탐색
 static void *best_fit(size_t asize)
 {
+    char *best_bp = NULL;
+    size_t best = (1 << 32) - 1;
+
+    for (char *bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp))
+    {
+        if (GET_ALLOC(HDRP(bp)) == 0 && GET_SIZE(HDRP(bp)) >= asize)
+        {
+            size_t remain = GET_SIZE(HDRP(bp)) - asize;
+            if (remain == 0)
+                return bp;
+            else if (best > remain)
+            {
+                best = remain;
+                best_bp = bp;
+            }
+        }
+    }
+
+    if (best_bp == NULL)
+        return NULL;
+
+    return best_bp;
 }
 
 // 가용 블록에서 적당한 크기의 블록 할당
