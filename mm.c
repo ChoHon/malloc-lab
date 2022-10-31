@@ -57,7 +57,7 @@ team_t team = {
 #define PUT(p, val) (*(unsigned int *)(p) = (val))
 
 // predecessor와 successor 포인터 초기화
-#define INIT_POINTER(p) *(char **)(p) = NULL;
+#define INIT_POINTER(p, addr) *(char **)(p) = addr;
 
 // header와 footer의 값을 보고 각각 size와 할당 비트를 return
 #define GET_SIZE(p) (GET(p) & ~0x7)
@@ -97,29 +97,19 @@ static void appendleft_free_b(void *bp);
 
 int mm_init(void)
 {
-    // heap 추가 요청
-    // 실패하면 -1 return
-    if ((block_list_header = mem_sbrk(6 * WSIZE)) == (void *)-1)
+    if ((block_list_header = mem_sbrk(16 * WSIZE)) == (void *)-1)
         return -1;
 
-    // pedding 블록
     PUT(block_list_header, 0);
 
-    // prologue의 header와 footer 초기화
-    PUT(block_list_header + (1 * WSIZE), PACK((2 * DSIZE), 1));
-    PUT(block_list_header + (4 * WSIZE), PACK((2 * DSIZE), 1));
+    PUT(block_list_header + (1 * WSIZE), PACK((14 * 4), 1));
+    PUT(block_list_header + (14 * WSIZE), PACK((14 * 4), 1));
 
-    // prologue 안에 predecessor와 success를 만들고 NULL로 초기화
-    // 가용 블록 리스트 header가 prologue로 초기화
-    free_list_header = block_list_header + 2 * WSIZE;
-    INIT_POINTER(block_list_header + (2 * WSIZE));
-    INIT_POINTER(block_list_header + (3 * WSIZE));
+    for (int i = 2; i < 14; i++)
+        INIT_POINTER(block_list_header + (WSIZE * i), NULL);
 
-    // epilogue 초기화
-    PUT(block_list_header + (5 * WSIZE), PACK(0, 1));
+    PUT(block_list_header + (15 * WSIZE), PACK(0, 1));
 
-    // heap 추가 요청
-    // 실패하면 -1, 성공하면 0 return
     if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
         return -1;
     return 0;
