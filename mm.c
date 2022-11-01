@@ -35,6 +35,7 @@ team_t team = {
     ""};
 
 /* single word (4) or double word (8) alignment */
+#define DEBUG
 #ifdef DEBUG
 #define dbg_printf(...) printf(__VA_ARGS__)
 #define dbg_printblock(a) printblock(a)
@@ -44,6 +45,7 @@ team_t team = {
 #endif
 
 /* do not change the following! */
+#define DRIVER
 #ifdef DRIVER
 /* create aliases for driver tests */
 #define malloc mm_malloc
@@ -56,9 +58,9 @@ team_t team = {
 #define WSIZE 4             /* word size (bytes) */
 #define DSIZE 8             /* doubleword size (bytes) */
 #define CHUNKSIZE (1 << 12) /* initial heap size (bytes) */
-#define OVERHEAD 16         /* overhead of header and footer (bytes) */
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
+#define MIN(x, y) ((x) > (y) ? (y) : (x))
 
 /* Pack a size and allocated bit into a word */
 #define PACK(size, alloc) ((size) | (alloc))
@@ -97,13 +99,10 @@ team_t team = {
 
 #define MIN_BLKSIZE 24
 
-/* class no: 0 - NUM_FREELIST-1 */
-#define NUM_FREELIST 10
+#define NUM_FREELIST 15
 
-/* The only global variable is a pointer to the first block */
 static char *heap_listp;
 
-/* function prototypes for internal helper routines */
 static void *extend_heap(size_t words);
 static void place(void *bp, size_t asize);
 static void *find_fit(size_t asize);
@@ -112,12 +111,12 @@ static void *coalesce(void *bp);
 static void delete_freenode(void *bp);
 static void insert_freenode(void *bp);
 static void *getroot(int class);
+static int getclass(size_t size);
+static int getrangeforclass(int class);
 
 static void printblock(void *bp);
 static void checkblock(void *bp);
 static void printfreelist();
-static int getclass(size_t size);
-static int getrangeforclass(int class);
 /*
  * mm_init - Initialize the memory manager
  * segregated list - save each root at beginning, each root is 2*DSIZE
@@ -126,20 +125,25 @@ int mm_init(void)
 {
     if ((heap_listp = mem_sbrk(DSIZE + NUM_FREELIST * DSIZE * 2)) == NULL)
         return -1;
+    // pedding block
     PUT(heap_listp, 0);
 
+    // epilogue block
     PUT(heap_listp + 2 * NUM_FREELIST * DSIZE + WSIZE, PACK(0, 1));
+
+    // 첫번째 prologue block의 bp로 조정
     heap_listp += DSIZE;
 
+    // prologue block 초기화
     for (int i = 0; i < NUM_FREELIST; i++)
     {
         char *root = getroot(i);
-        PUT(root - WSIZE, PACK(OVERHEAD, 1)); /* prologue header */
-        PUT_ADDR(root, NULL);                 /* root next free node */
-        PUT(root + DSIZE, PACK(OVERHEAD, 1)); /* prologue footer */
+        PUT(root - WSIZE, PACK(2 * DSIZE, 1));
+        PUT_ADDR(root, NULL);
+        PUT(root + DSIZE, PACK(2 * DSIZE, 1));
     }
 
-    /* Extend the empty heap with a free block of CHUNKSIZE bytes */
+    // heap 추가
     if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
         return -1;
     return 0;
@@ -195,182 +199,55 @@ void free(void *bp)
     coalesce(bp);
 }
 
-/*
- * delete_freenode - delete the block from free list when it is allocated
- */
-static void delete_freenode(void *bp)
-{
-    void *next_free_block_addr = (void *)*NEXTP(bp);
-    void *prev_free_block_addr = (void *)*PREVP(bp);
-    PUT_ADDR(NEXTP(prev_free_block_addr), next_free_block_addr);
-    if (next_free_block_addr != NULL)
-    {
-        PUT_ADDR(PREVP(next_free_block_addr), prev_free_block_addr);
-    }
-}
-
-/*
- * insert_freenode - insert the freed block to the free list
- */
-static void insert_freenode(void *bp)
-{
-    size_t size = GET_SIZE(HDRP(bp));
-    void *root = getroot(getclass(size));
-    void *next_free_block_addr = (void *)*NEXTP(root);
-    PUT_ADDR(NEXTP(bp), *NEXTP(root));
-    PUT_ADDR(PREVP(bp), root);
-
-    PUT_ADDR(NEXTP(root), bp);
-    if (next_free_block_addr != NULL)
-    {
-        PUT_ADDR(PREVP(next_free_block_addr), bp);
-    }
-}
-
 /* Not implemented. For consistency with 15-213 malloc driver */
 void *realloc(void *oldptr, size_t size)
 {
     dbg_printf("Calling mm_relloc........");
-    size_t oldsize;
     void *newptr;
 
-    /* If size == 0 then this is just free, and we return NULL. */
+    // size가 0이면 free와 동일
     if (size == 0)
     {
         free(oldptr);
         return 0;
     }
 
-    /* If oldptr is NULL, then this is just malloc. */
+    // 변경할 할당 블록을 입력 안하면 malloc과 동일
     if (oldptr == NULL)
-    {
         return malloc(size);
-    }
-
-    newptr = malloc(size);
 
     /* If realloc() fails the original block is left untouched  */
-    if (!newptr)
+    if ((newptr = malloc(size)) == NULL)
     {
         return 0;
     }
 
-    /* Copy the old data. */
-    oldsize = *SIZE_PTR(oldptr);
-    if (size < oldsize)
-        oldsize = size;
-    memcpy(newptr, oldptr, oldsize);
+    memcpy(newptr, oldptr, MIN(size, GET_SIZE(HDRP(oldptr))));
 
-    /* Free the old block. */
     free(oldptr);
 
     return newptr;
 }
 
-/*
- * calloc - you may want to look at mm-naive.c
- * This function is not tested by mdriver, but it is
- * needed to run the traces.
- */
-void *calloc(size_t nmemb, size_t size)
-{
-    size_t bytes = nmemb * size;
-    void *newptr;
-
-    newptr = malloc(bytes);
-    memset(newptr, 0, bytes);
-
-    return newptr;
-}
-
-/*
- * mm_checkheap - Check the heap for consistency
- */
-void mm_checkheap(int verbose)
-{
-    char *bp = heap_listp;
-
-    if (verbose)
-        printf("Heap (%p):\n", heap_listp);
-
-    if ((GET_SIZE(HDRP(heap_listp)) != OVERHEAD) || !GET_ALLOC(HDRP(heap_listp)))
-        printf("Bad prologue header\n");
-    checkblock(heap_listp);
-
-    for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp))
-    {
-        if (verbose)
-            printblock(bp);
-        checkblock(bp);
-    }
-
-    if (verbose)
-        printblock(bp);
-
-    if ((GET_SIZE(HDRP(bp)) != 0) || !(GET_ALLOC(HDRP(bp))))
-        printf("Bad epilogue header\n");
-
-    printfreelist();
-}
-
-/* The remaining routines are internal helper routines */
-
-/*
- * getclass - Get class for given size
- */
-static int getclass(size_t size)
-{
-    int block = size / DSIZE;
-    for (int i = 0; i < NUM_FREELIST - 1; i++)
-    {
-        if (block <= getrangeforclass(i) && block > getrangeforclass(i - 1))
-        {
-            return i;
-        }
-    }
-    return NUM_FREELIST - 1;
-}
-
-static int getrangeforclass(int class)
-{
-    return 1 << (class + 2);
-}
-
-/*
- * getroot - Get root node for corresponding class
- */
-static void *getroot(int class)
-{
-    return heap_listp + class * 2 * DSIZE;
-}
-
-/*
- * extend_heap - Extend heap with free block and return its block pointer
- */
+// heap 공간 추가
 static void *extend_heap(size_t words)
 {
     void *bp;
     size_t size;
 
-    /* Allocate an even number of words to maintain alignment */
     size = (words % 2) ? (words + 1) * WSIZE : words * WSIZE;
     if ((bp = mem_sbrk(size)) == (void *)-1)
         return NULL;
 
-    /* Initialize free block header/footer and the epilogue header */
-    PUT(HDRP(bp), PACK(size, 0)); /* free block header */
-    PUT(FTRP(bp), PACK(size, 0)); /* free block footer */
+    PUT(HDRP(bp), PACK(size, 0));
+    PUT(FTRP(bp), PACK(size, 0));
 
-    PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1)); /* new epilogue header */
+    PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));
 
-    /* Coalesce if the previous block was free */
     return coalesce(bp);
 }
 
-/*
- * place - Place block of asize bytes at start of free block bp
- *         and split if remainder would be at least minimum block size
- */
+// 찾은 가용 블록에 할당
 static void place(void *bp, size_t asize)
 {
     size_t csize = GET_SIZE(HDRP(bp));
@@ -403,18 +280,19 @@ static void place(void *bp, size_t asize)
     }
 }
 
-/*
- * find_fit - Find a fit for a block with asize bytes
- */
+// 가용리스트 탐색 - first fit
 static void *find_fit(size_t asize)
 {
     dbg_printf("FINDING FIT: ");
     void *bp;
     int class = getclass(asize);
+
+    // 현재 size class와 그것보다 큰 size class에서 탐색
     for (int i = class; i < NUM_FREELIST; i++)
     {
         void *root = getroot(i);
         /* first fit search */
+        // 가용 리스트 앞에서부터 탐색
         for (bp = root; bp != NULL; bp = (char *)*NEXTP(bp))
         {
             dbg_printf(" %lx > ", (long)bp);
@@ -430,24 +308,25 @@ static void *find_fit(size_t asize)
     return NULL; /* no fit */
 }
 
-/*
- * coalesce - boundary tag coalescing. Return ptr to coalesced block
- */
+// 연결
 static void *coalesce(void *bp)
 {
     dbg_printf("Coalescing\n");
+    dbg_printblock(bp);
     dbg_printblock(PREV_BLKP(bp));
     dbg_printblock(NEXT_BLKP(bp));
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
     size_t size = GET_SIZE(HDRP(bp));
 
+    // 앞뒤 블록 모두 할당 블록
     if (prev_alloc && next_alloc)
-    {                        /* Case 1 */
-        insert_freenode(bp); /* insert the free node to the head of freelist */
+    {
+        insert_freenode(bp);
         return bp;
     }
 
+    // 다음 블록만 가용 브록
     else if (prev_alloc && !next_alloc)
     { /* Case 2 */
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
@@ -459,6 +338,7 @@ static void *coalesce(void *bp)
         return (bp);
     }
 
+    // 이전 블록만 가용 브록
     else if (!prev_alloc && next_alloc)
     { /* Case 3 */
         size += GET_SIZE(HDRP(PREV_BLKP(bp)));
@@ -470,8 +350,9 @@ static void *coalesce(void *bp)
         return (PREV_BLKP(bp));
     }
 
+    // 앞뒤 블록 모두 가용 블록
     else
-    { /* Case 4 */
+    {
         size += GET_SIZE(HDRP(PREV_BLKP(bp))) +
                 GET_SIZE(FTRP(NEXT_BLKP(bp)));
         delete_freenode(PREV_BLKP(bp));
@@ -482,6 +363,59 @@ static void *coalesce(void *bp)
         dbg_printblock(PREV_BLKP(bp));
         return (PREV_BLKP(bp));
     }
+}
+
+// 가용 블록 삭제
+static void delete_freenode(void *bp)
+{
+    void *next_free_block_addr = (void *)*NEXTP(bp);
+    void *prev_free_block_addr = (void *)*PREVP(bp);
+    PUT_ADDR(NEXTP(prev_free_block_addr), next_free_block_addr);
+    if (next_free_block_addr != NULL)
+    {
+        PUT_ADDR(PREVP(next_free_block_addr), prev_free_block_addr);
+    }
+}
+
+// 가용 리스트 맨 앞에 가용 블록 추가
+static void insert_freenode(void *bp)
+{
+    size_t size = GET_SIZE(HDRP(bp));
+    void *root = getroot(getclass(size));
+    void *next_free_block_addr = (void *)*NEXTP(root);
+    PUT_ADDR(NEXTP(bp), *NEXTP(root));
+    PUT_ADDR(PREVP(bp), root);
+
+    PUT_ADDR(NEXTP(root), bp);
+    if (next_free_block_addr != NULL)
+    {
+        PUT_ADDR(PREVP(next_free_block_addr), bp);
+    }
+}
+
+// 각 prologue block bp 구함
+static void *getroot(int class)
+{
+    return heap_listp + class * 2 * DSIZE;
+}
+
+static int getrangeforclass(int class)
+{
+    return 1 << (class + 2);
+}
+
+// size에 맞는 size class 찾기
+static int getclass(size_t size)
+{
+    int block = size / DSIZE;
+    for (int i = 0; i < NUM_FREELIST - 1; i++)
+    {
+        if (block <= getrangeforclass(i) && block > getrangeforclass(i - 1))
+        {
+            return i;
+        }
+    }
+    return NUM_FREELIST - 1;
 }
 
 static void printblock(void *bp)
