@@ -69,6 +69,7 @@ team_t team = {
 #define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
 
 // bp의 predecessor와 successor를 return
+#define FREE_LIST_HEADER(bp) (*(void **)(bp))
 #define PRED(bp) (*(void **)(bp))
 #define SUCC(bp) (*(void **)(bp + WSIZE))
 
@@ -93,7 +94,8 @@ static void *best_fit(size_t asize);
 static void place(void *bp, size_t asize);
 
 static void remove_free_b(void *bp);
-static void appendleft_free_b(void *bp);
+static void append_free_b(void *bp);
+static int cul_idx(size_t size);
 
 int mm_init(void)
 {
@@ -109,6 +111,8 @@ int mm_init(void)
         INIT_POINTER(block_list_header + (WSIZE * i), NULL);
 
     PUT(block_list_header + (15 * WSIZE), PACK(0, 1));
+
+    block_list_header += (2 * WSIZE);
 
     if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
         return -1;
@@ -137,8 +141,7 @@ void *mm_malloc(size_t size)
     else
         asize = DSIZE * ((size + (DSIZE - 1) + (DSIZE)) / DSIZE);
 
-    // asize를 수용할 수 있는 가용 블록을 찾으면
-    if ((bp = best_fit(asize)) != NULL)
+    if ((bp = first_fit(asize)) != NULL)
     {
         // 메모리를 할당하고 bp return
         place(bp, asize);
@@ -236,10 +239,8 @@ static void *coalesce(void *bp)
     // 다음 블록만 가용 블록
     if (prev_alloc && !next_alloc)
     {
-        // 다음 블록을 가용 블록 리스트에서 삭제
         remove_free_b(NEXT_BLKP(bp));
 
-        // 연결
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
         PUT(HDRP(bp), PACK(size, 0));
         PUT(FTRP(bp), PACK(size, 0));
@@ -247,10 +248,8 @@ static void *coalesce(void *bp)
     // 이전 블록만 가용 블록
     else if (!prev_alloc && next_alloc)
     {
-        // 이전 블록을 가용 블록 리스트에서 삭제
         remove_free_b(PREV_BLKP(bp));
 
-        // 연결
         size += GET_SIZE(HDRP(PREV_BLKP(bp)));
         bp = PREV_BLKP(bp);
         PUT(HDRP(bp), PACK(size, 0));
@@ -259,19 +258,16 @@ static void *coalesce(void *bp)
     // 이전 블록과 다음 블록 둘 다 가용 블록
     else if (!prev_alloc && !next_alloc)
     {
-        // 이전 블록과 다음 블록을 가용 블록 리스트에서 삭제
         remove_free_b(PREV_BLKP(bp));
         remove_free_b(NEXT_BLKP(bp));
 
-        // 연결
         size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
         bp = PREV_BLKP(bp);
         PUT(HDRP(bp), PACK(size, 0));
         PUT(FTRP(bp), PACK(size, 0));
     }
 
-    // 새로 생긴 가용 블록을 가용 블록 리스트 앞에 추가
-    appendleft_free_b(bp);
+    append_free_b(bp);
 
     return bp;
 }
@@ -279,50 +275,23 @@ static void *coalesce(void *bp)
 // first fit으로 가용 블록 탐색
 static void *first_fit(size_t asize)
 {
-    // bp를 첫 가용 블록으로 초기화
-    void *bp = free_list_header;
+    int idx = cul_idx(asize);
+    void *cur_block;
 
-    // 할당된 블록을 만나기 전까지 = prologue를 만나기 전까지 = 가용 블록 리스트 끝까지 갈 때까지
-    while (GET_ALLOC(HDRP(bp)) != 1)
-    {
-        // 블록 size가 필요한 size보다 작으면 continue
-        if (GET_SIZE(HDRP(bp)) < asize)
-            bp = SUCC(bp);
+    cur_block = FREE_LIST_HEADER(block_list_header + (WSIZE * idx));
+    while (cur_block != NULL && GET_SIZE(HDRP(cur_block)) < asize)
+        cur_block = SUCC(cur_block);
 
-        // 현재 블록이 필요한 size를 담을 수 있는 가용 블록이면 블록 주소 return
-        else
-            return bp;
-    }
-
-    // 현재 heap에 필요한 size를 담을 수 있는 가용 블록이 없으면 NULL return
-    return NULL;
-}
-
-// best fit으로 가용 블록 탐색
-static void *best_fit(size_t asize)
-{
-    char *best_bp = NULL;
-    size_t best = __SIZE_MAX__;
-
-    for (char *bp = free_list_header; GET_ALLOC(HDRP(bp)) == 0; bp = SUCC(bp))
-    {
-        if (GET_SIZE(HDRP(bp)) >= asize)
+    if (cur_block == NULL)
+        for (idx++; idx < 12; idx++)
         {
-            size_t remain = GET_SIZE(HDRP(bp)) - asize;
-            if (remain == 0)
-                return bp;
-            else if (best > remain)
-            {
-                best = remain;
-                best_bp = bp;
-            }
+            cur_block = FREE_LIST_HEADER(block_list_header + (WSIZE * idx));
+            if (cur_block != NULL)
+                break;
         }
-    }
 
-    if (best_bp == NULL)
-        return NULL;
-
-    return best_bp;
+    // remove_free_b(cur_block);
+    return cur_block;
 }
 
 // 가용 블록에서 적당한 크기의 블록 할당
@@ -357,36 +326,55 @@ static void place(void *bp, size_t asize)
         PUT(HDRP(bp), PACK(remain, 0));
         PUT(FTRP(bp), PACK(remain, 0));
 
-        // 새로 생긴 가용 블록을 가용 블록 리스트 앞에 추가
-        appendleft_free_b(bp);
+        coalesce(bp);
     }
 }
 
 // 가용 블록 리스트에서 특정 블록을 삭제
 static void remove_free_b(void *bp)
 {
-    // head일 경우
-    if (bp == free_list_header)
+    int idx = cul_idx(GET_SIZE(HDRP(bp)));
+    void *header = FREE_LIST_HEADER(block_list_header + (WSIZE * idx));
+
+    if (bp == NULL)
+        return;
+
+    if (header == bp)
     {
-        PRED(SUCC(bp)) = NULL;
-        free_list_header = SUCC(bp);
-    }
-    // 중간의 블록일 경우
-    else
-    {
-        SUCC(PRED(bp)) = SUCC(bp);
+        FREE_LIST_HEADER(PRED(bp)) = SUCC(bp);
         PRED(SUCC(bp)) = PRED(bp);
     }
-    // 마지막 블록은 항상 prologue이기 때문에 고려하지 않음
+    else
+    {
+        if (SUCC(bp) != NULL)
+            PRED(SUCC(bp)) = PRED(bp);
+        SUCC(PRED(bp)) = SUCC(bp);
+    }
 }
 
 // 가용 블록 리스트 앞에 새로운 블록을 추가
-static void appendleft_free_b(void *bp)
+static void append_free_b(void *bp)
 {
-    SUCC(bp) = free_list_header;
-    PRED(bp) = NULL;
-    PRED(free_list_header) = bp;
+    int idx = cul_idx(GET_SIZE(HDRP(bp)));
+    void *cur_block = FREE_LIST_HEADER(block_list_header + (WSIZE * idx));
 
-    // 가용 블록 리스트 header를 추가된 블록으로 변경
-    free_list_header = bp;
+    while (SUCC(cur_block) == NULL && GET_SIZE(HDRP(SUCC(cur_block))) > GET_SIZE(HDRP(bp)))
+        cur_block = SUCC(cur_block);
+
+    PRED(bp) = cur_block;
+    SUCC(bp) = SUCC(cur_block);
+
+    SUCC(PRED(bp)) = bp;
+    if (SUCC(bp) != NULL)
+        PRED(SUCC(bp)) = bp;
+}
+
+static int cul_idx(size_t size)
+{
+    int idx = -4;
+
+    for (size--; size > 0; size /= 2)
+        idx++;
+
+    return idx;
 }
