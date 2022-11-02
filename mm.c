@@ -23,7 +23,7 @@ team_t team = {
     /* Second member's email address (leave blank if none) */
     ""};
 
-#define DEBUG
+// #define DEBUG
 #ifdef DEBUG
 #define dbg_printf(...) printf(__VA_ARGS__)
 #define dbg_printblock(a) printblock(a)
@@ -115,7 +115,7 @@ int mm_init(void)
     return 0;
 }
 
-void *malloc(size_t size)
+void *mm_malloc(size_t size)
 {
     dbg_printf("Calling mm_malloc........");
     size_t asize;      /* adjusted block size */
@@ -147,7 +147,7 @@ void *malloc(size_t size)
     return bp;
 }
 
-void free(void *bp)
+void mm_free(void *bp)
 {
     dbg_printf("Calling mm_free........");
     if (!bp)
@@ -159,7 +159,7 @@ void free(void *bp)
     coalesce(bp);
 }
 
-void *realloc(void *oldptr, size_t size)
+void *mm_realloc(void *oldptr, size_t size)
 {
     dbg_printf("Calling mm_relloc........");
     void *newptr;
@@ -167,23 +167,23 @@ void *realloc(void *oldptr, size_t size)
     // size가 0이면 free와 동일
     if (size == 0)
     {
-        free(oldptr);
+        mm_free(oldptr);
         return 0;
     }
 
     // 변경할 할당 블록을 입력 안하면 malloc과 동일
     if (oldptr == NULL)
-        return malloc(size);
+        return mm_malloc(size);
 
     /* If realloc() fails the original block is left untouched  */
-    if ((newptr = malloc(size)) == NULL)
+    if ((newptr = mm_malloc(size)) == NULL)
     {
         return 0;
     }
 
     memcpy(newptr, oldptr, MIN(size, GET_SIZE(HDRP(oldptr))));
 
-    free(oldptr);
+    mm_free(oldptr);
 
     return newptr;
 }
