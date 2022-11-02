@@ -27,9 +27,11 @@ team_t team = {
 #ifdef DEBUG
 #define dbg_printf(...) printf(__VA_ARGS__)
 #define dbg_printblock(a) printblock(a)
+#define dbg_printfreelist() printfreelist()
 #else
 #define dbg_printf(...)
 #define dbg_printblock(a)
+#define dbg_printfreelist()
 #endif
 
 #define WSIZE 4
@@ -135,6 +137,7 @@ void *mm_malloc(size_t size)
         place(bp, asize);
         dbg_printf("place succeed: ");
         dbg_printblock(bp);
+        dbg_printf("%p\n", mem_heap_hi());
         dbg_printblock(NEXT_BLKP(bp));
         return bp;
     }
@@ -159,33 +162,85 @@ void mm_free(void *bp)
     coalesce(bp);
 }
 
-void *mm_realloc(void *oldptr, size_t size)
+void *mm_realloc(void *old_bp, size_t size)
 {
-    dbg_printf("Calling mm_relloc........");
-    void *newptr;
+    dbg_printf("Calling mm_relloc........\n");
+    void *new_bp = NULL;
+    size_t new_size = ALIGN(size) + DSIZE;
+    size_t old_size = GET_SIZE(HDRP(old_bp));
 
-    // size가 0이면 free와 동일
-    if (size == 0)
+    // new_size가 0이면 free와 동일
+    if (new_size == 0)
     {
-        mm_free(oldptr);
+        mm_free(old_bp);
         return 0;
     }
 
     // 변경할 할당 블록을 입력 안하면 malloc과 동일
-    if (oldptr == NULL)
+    if (old_bp == NULL)
         return mm_malloc(size);
 
-    /* If realloc() fails the original block is left untouched  */
-    if ((newptr = mm_malloc(size)) == NULL)
+    if (old_size >= new_size)
     {
-        return 0;
+        dbg_printf("No Change %d::%d\n", old_size, new_size);
+        return old_bp;
+    }
+    else if (old_size < new_size)
+    {
+
+        if (GET_SIZE(HDRP(NEXT_BLKP(old_bp))) == 0)
+        {
+            dbg_printf("Old bp is end of heap > ");
+            extend_heap(MAX((new_size - old_size), CHUNKSIZE) / WSIZE);
+        }
+
+        dbg_printf("New(%d) bigger than Old(%d)", new_size, old_size);
+        if (GET_ALLOC(HDRP(NEXT_BLKP(old_bp))) == 0)
+        {
+            dbg_printf(" > Next block is free");
+            size_t extend_size = old_size + GET_SIZE(HDRP(NEXT_BLKP(old_bp)));
+            size_t remain = extend_size - new_size;
+
+            if (remain >= 0)
+            {
+                dbg_printf(" > Extend(%d) bigger than New(%d)\n", extend_size, new_size);
+                dbg_printblock(old_bp);
+                dbg_printblock(NEXT_BLKP(old_bp));
+
+                delete_freenode(NEXT_BLKP(old_bp));
+
+                if (remain > MIN_BLKSIZE)
+                {
+                    PUT(HDRP(old_bp), PACK(new_size, 1));
+                    PUT(FTRP(old_bp), PACK(new_size, 1));
+
+                    PUT(HDRP(NEXT_BLKP(old_bp)), PACK(remain, 0));
+                    PUT(FTRP(NEXT_BLKP(old_bp)), PACK(remain, 0));
+                    insert_freenode(NEXT_BLKP(old_bp));
+
+                    dbg_printf("After Change %d\n", new_size);
+                    dbg_printblock(old_bp);
+                    dbg_printblock(NEXT_BLKP(old_bp));
+                }
+                else
+                {
+                    PUT(HDRP(old_bp), PACK(extend_size, 1));
+                    PUT(FTRP(old_bp), PACK(extend_size, 1));
+                }
+                return old_bp;
+            }
+        }
     }
 
-    memcpy(newptr, oldptr, MIN(size, GET_SIZE(HDRP(oldptr))));
+    if ((new_bp = mm_malloc(size)) == NULL)
+        return NULL;
+    dbg_printf("New alloction\n");
 
-    mm_free(oldptr);
+    memcpy(new_bp, old_bp, MIN(size, GET_SIZE(HDRP(old_bp)) - DSIZE));
 
-    return newptr;
+    mm_free(old_bp);
+
+    return new_bp;
 }
 
 // heap 공간 추가
