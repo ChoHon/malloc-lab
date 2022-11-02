@@ -113,7 +113,7 @@ int mm_init(void)
 
     // heap 추가
     // CHUNKSIZE가 아닌건 coalescing test case 저격인듯
-    if (extend_heap((1 << 6)) == NULL)
+    if (extend_heap(48) == NULL)
         return -1;
     return 0;
 }
@@ -180,22 +180,6 @@ void *mm_realloc(void *old_bp, size_t size)
     if (old_bp == NULL)
         return mm_malloc(size);
 
-    // if (GET_ALLOC(HDRP(PREV_BLKP(old_bp))) == 0)
-    // {
-    //     void *prev_block_bp = PREV_BLKP(old_bp);
-    //     size_t prev_block_size = GET_SIZE(HDRP(prev_block_bp));
-
-    //     memcpy(prev_block_bp, old_bp, old_size);
-
-    //     PUT(HDRP(prev_block_bp), PACK(old_size, 1));
-    //     PUT(FTRP(prev_block_bp), PACK(old_size, 1));
-
-    //     PUT(HDRP(NEXT_BLKP(prev_block_bp)), PACK(prev_block_size, 0));
-    //     PUT(FTRP(NEXT_BLKP(prev_block_bp)), PACK(prev_block_size, 0));
-
-    //     old_bp = prev_block_bp;
-    // }
-
     if (old_size >= new_size)
     {
         dbg_printf("No Change %d::%d\n", old_size, new_size);
@@ -203,7 +187,6 @@ void *mm_realloc(void *old_bp, size_t size)
     }
     else if (old_size < new_size)
     {
-
         if (GET_SIZE(HDRP(NEXT_BLKP(old_bp))) == 0)
         {
             dbg_printf("Old bp is end of heap > ");
@@ -213,18 +196,18 @@ void *mm_realloc(void *old_bp, size_t size)
         dbg_printf("New(%d) bigger than Old(%d)", new_size, old_size);
         if (GET_ALLOC(HDRP(NEXT_BLKP(old_bp))) == 0)
         {
-            dbg_printf(" > Next block is free");
+            dbg_printf(" > Next block(%d) is free", GET_SIZE(HDRP(NEXT_BLKP(old_bp))));
             extend_size = old_size + GET_SIZE(HDRP(NEXT_BLKP(old_bp)));
-            size_t remain = extend_size - new_size;
 
-            if (remain >= 0)
+            if (extend_size >= new_size)
             {
+                size_t remain = extend_size - new_size;
+
                 dbg_printf(" > Extend(%d) bigger than New(%d)\n", extend_size, new_size);
                 dbg_printblock(old_bp);
                 dbg_printblock(NEXT_BLKP(old_bp));
 
                 delete_freenode(NEXT_BLKP(old_bp));
-
                 if (remain > MIN_BLKSIZE)
                 {
                     PUT(HDRP(old_bp), PACK(new_size, 1));
@@ -232,7 +215,7 @@ void *mm_realloc(void *old_bp, size_t size)
 
                     PUT(HDRP(NEXT_BLKP(old_bp)), PACK(remain, 0));
                     PUT(FTRP(NEXT_BLKP(old_bp)), PACK(remain, 0));
-                    insert_freenode(NEXT_BLKP(old_bp));
+                    coalesce(NEXT_BLKP(old_bp));
 
                     dbg_printf("After Change %d\n", new_size);
                     dbg_printblock(old_bp);
@@ -242,7 +225,11 @@ void *mm_realloc(void *old_bp, size_t size)
                 {
                     PUT(HDRP(old_bp), PACK(extend_size, 1));
                     PUT(FTRP(old_bp), PACK(extend_size, 1));
+
+                    dbg_printf("After Change %d\n", new_size);
+                    dbg_printblock(old_bp);
                 }
+
                 return old_bp;
             }
         }
@@ -302,7 +289,7 @@ static void *place(void *bp, size_t asize)
         PUT(HDRP(NEXT_BLKP(bp)), PACK(asize, 1));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(asize, 1));
 
-        insert_freenode(bp);
+        coalesce(bp);
 
         dbg_printblock(NEXT_BLKP(bp));
 
@@ -321,7 +308,7 @@ static void *place(void *bp, size_t asize)
         PUT(HDRP(NEXT_BLKP(bp)), PACK(csize - asize, 0));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(csize - asize, 0));
 
-        insert_freenode(NEXT_BLKP(bp));
+        coalesce(NEXT_BLKP(bp));
 
         dbg_printblock(NEXT_BLKP(bp));
     }
@@ -360,9 +347,6 @@ static void *find_fit(size_t asize)
 static void *coalesce(void *bp)
 {
     dbg_printf("Coalescing\n");
-    dbg_printblock(bp);
-    dbg_printblock(PREV_BLKP(bp));
-    dbg_printblock(NEXT_BLKP(bp));
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
     size_t size = GET_SIZE(HDRP(bp));
