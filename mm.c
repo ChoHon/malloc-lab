@@ -1,14 +1,3 @@
-/*
- * mm-naive.c - The fastest, least memory-efficient malloc package.
- *
- * In this naive approach, a block is allocated by simply incrementing
- * the brk pointer.  A block is pure payload. There are no headers or
- * footers.  Blocks are never coalesced or reused. Realloc is
- * implemented directly using mm_malloc and mm_free.
- *
- * NOTE TO STUDENTS: Replace this header comment with your own header
- * comment that gives a high level description of your solution.
- */
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -34,7 +23,6 @@ team_t team = {
     /* Second member's email address (leave blank if none) */
     ""};
 
-/* single word (4) or double word (8) alignment */
 #define DEBUG
 #ifdef DEBUG
 #define dbg_printf(...) printf(__VA_ARGS__)
@@ -44,53 +32,34 @@ team_t team = {
 #define dbg_printblock(a)
 #endif
 
-/* do not change the following! */
-#define DRIVER
-#ifdef DRIVER
-/* create aliases for driver tests */
-#define malloc mm_malloc
-#define free mm_free
-#define realloc mm_realloc
-#define calloc mm_calloc
-#endif /* def DRIVER */
-
-/* Basic constants and macros */
-#define WSIZE 4             /* word size (bytes) */
-#define DSIZE 8             /* doubleword size (bytes) */
-#define CHUNKSIZE (1 << 12) /* initial heap size (bytes) */
+#define WSIZE 4
+#define DSIZE 8
+#define CHUNKSIZE (1 << 12)
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 #define MIN(x, y) ((x) > (y) ? (y) : (x))
 
-/* Pack a size and allocated bit into a word */
 #define PACK(size, alloc) ((size) | (alloc))
 
-/* Read and write a word at address p */
 #define GET(p) (*(unsigned int *)(p))
 #define PUT(p, val) (*(unsigned int *)(p) = (val))
 
 #define PUT_ADDR(p, val) (*(long *)(p) = (long)(val))
 
-/* Read the size and allocated fields from address p */
 #define GET_SIZE(p) (GET(p) & ~0x7)
 #define GET_ALLOC(p) (GET(p) & 0x1)
 
-/* Given block ptr bp, compute address of its header and footer */
 #define HDRP(bp) ((char *)(bp)-WSIZE)
 #define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
 
-/* Given block ptr bp, read address of its next/prev free block pointer */
 #define NEXTP(bp) (long *)((char *)(bp))
 #define PREVP(bp) (long *)((char *)(bp) + DSIZE)
 
-/* Given block ptr bp, compute address of next and previous blocks */
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp)-WSIZE)))
 #define PREV_BLKP(bp) ((char *)(bp)-GET_SIZE(((char *)(bp)-DSIZE)))
 
-/* single word (4) or double word (8) alignment */
 #define ALIGNMENT 8
 
-/* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(p) (((size_t)(p) + (ALIGNMENT - 1)) & ~0x7)
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
@@ -117,10 +86,7 @@ static int getrangeforclass(int class);
 static void printblock(void *bp);
 static void checkblock(void *bp);
 static void printfreelist();
-/*
- * mm_init - Initialize the memory manager
- * segregated list - save each root at beginning, each root is 2*DSIZE
- */
+
 int mm_init(void)
 {
     if ((heap_listp = mem_sbrk(DSIZE + NUM_FREELIST * DSIZE * 2)) == NULL)
@@ -149,9 +115,6 @@ int mm_init(void)
     return 0;
 }
 
-/*
- * mm_malloc - Allocate a block with at least size bytes of payload
- */
 void *malloc(size_t size)
 {
     dbg_printf("Calling mm_malloc........");
@@ -184,9 +147,6 @@ void *malloc(size_t size)
     return bp;
 }
 
-/*
- * mm_free - Free a block
- */
 void free(void *bp)
 {
     dbg_printf("Calling mm_free........");
@@ -199,7 +159,6 @@ void free(void *bp)
     coalesce(bp);
 }
 
-/* Not implemented. For consistency with 15-213 malloc driver */
 void *realloc(void *oldptr, size_t size)
 {
     dbg_printf("Calling mm_relloc........");
