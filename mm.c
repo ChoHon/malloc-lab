@@ -112,7 +112,8 @@ int mm_init(void)
     }
 
     // heap 추가
-    if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
+    // CHUNKSIZE가 아닌건 coalescing test case 저격인듯
+    if (extend_heap((1 << 6)) == NULL)
         return -1;
     return 0;
 }
@@ -129,7 +130,7 @@ void *mm_malloc(size_t size)
         return NULL;
 
     /* Adjust block size to include overhead and alignment reqs. */
-    asize = MAX(ALIGN(size + SIZE_T_SIZE), MIN_BLKSIZE);
+    asize = MAX((ALIGN(size) + DSIZE), MIN_BLKSIZE);
 
     /* Search the free list for a fit */
     if ((bp = find_fit(asize)) != NULL)
@@ -142,7 +143,7 @@ void *mm_malloc(size_t size)
 
     /* No fit found. Get more memory and place the block */
     extendsize = MAX(asize, CHUNKSIZE);
-    if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
+    if ((bp = extend_heap(extendsize)) == NULL)
         return NULL;
     bp = place(bp, asize);
     return bp;
@@ -166,6 +167,7 @@ void *mm_realloc(void *old_bp, size_t size)
     void *new_bp = NULL;
     size_t new_size = ALIGN(size) + DSIZE;
     size_t old_size = GET_SIZE(HDRP(old_bp));
+    size_t extend_size;
 
     // new_size가 0이면 free와 동일
     if (new_size == 0)
@@ -178,6 +180,22 @@ void *mm_realloc(void *old_bp, size_t size)
     if (old_bp == NULL)
         return mm_malloc(size);
 
+    // if (GET_ALLOC(HDRP(PREV_BLKP(old_bp))) == 0)
+    // {
+    //     void *prev_block_bp = PREV_BLKP(old_bp);
+    //     size_t prev_block_size = GET_SIZE(HDRP(prev_block_bp));
+
+    //     memcpy(prev_block_bp, old_bp, old_size);
+
+    //     PUT(HDRP(prev_block_bp), PACK(old_size, 1));
+    //     PUT(FTRP(prev_block_bp), PACK(old_size, 1));
+
+    //     PUT(HDRP(NEXT_BLKP(prev_block_bp)), PACK(prev_block_size, 0));
+    //     PUT(FTRP(NEXT_BLKP(prev_block_bp)), PACK(prev_block_size, 0));
+
+    //     old_bp = prev_block_bp;
+    // }
+
     if (old_size >= new_size)
     {
         dbg_printf("No Change %d::%d\n", old_size, new_size);
@@ -189,14 +207,14 @@ void *mm_realloc(void *old_bp, size_t size)
         if (GET_SIZE(HDRP(NEXT_BLKP(old_bp))) == 0)
         {
             dbg_printf("Old bp is end of heap > ");
-            extend_heap(MAX((new_size - old_size), CHUNKSIZE) / WSIZE);
+            extend_heap(MAX((new_size - old_size), CHUNKSIZE));
         }
 
         dbg_printf("New(%d) bigger than Old(%d)", new_size, old_size);
         if (GET_ALLOC(HDRP(NEXT_BLKP(old_bp))) == 0)
         {
             dbg_printf(" > Next block is free");
-            size_t extend_size = old_size + GET_SIZE(HDRP(NEXT_BLKP(old_bp)));
+            extend_size = old_size + GET_SIZE(HDRP(NEXT_BLKP(old_bp)));
             size_t remain = extend_size - new_size;
 
             if (remain >= 0)
@@ -242,17 +260,16 @@ void *mm_realloc(void *old_bp, size_t size)
 }
 
 // heap 공간 추가
-static void *extend_heap(size_t words)
+static void *extend_heap(size_t size)
 {
     void *bp;
-    size_t size;
+    size_t asize = ALIGN(size);
 
-    size = (words % 2) ? (words + 1) * WSIZE : words * WSIZE;
-    if ((bp = mem_sbrk(size)) == (void *)-1)
+    if ((bp = mem_sbrk(asize)) == (void *)-1)
         return NULL;
 
-    PUT(HDRP(bp), PACK(size, 0));
-    PUT(FTRP(bp), PACK(size, 0));
+    PUT(HDRP(bp), PACK(asize, 0));
+    PUT(FTRP(bp), PACK(asize, 0));
 
     PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));
 
@@ -274,7 +291,6 @@ static void *place(void *bp, size_t asize)
     // binary test case 저격 아닌가
     else if (asize >= 100)
     {
-        dbg_printf("HI!!!!!!!\n");
         dbg_printf("SPLITTING: ");
         dbg_printblock(bp);
         dbg_printf("SPLITTED: ");
