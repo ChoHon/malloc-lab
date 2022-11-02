@@ -211,15 +211,15 @@ static void place(void *bp, size_t asize)
 {
     size_t csize = GET_SIZE(HDRP(bp));
 
+    delete_freenode(bp);
+
     if ((csize - asize) >= MIN_BLKSIZE)
     {
-
         dbg_printf("SPLITTING: ");
         dbg_printblock(bp);
         dbg_printf("SPLITTED: ");
         PUT(HDRP(bp), PACK(asize, 1));
         PUT(FTRP(bp), PACK(asize, 1));
-        delete_freenode(bp);
         dbg_printblock(bp);
         bp = NEXT_BLKP(bp);
 
@@ -235,7 +235,6 @@ static void place(void *bp, size_t asize)
     {
         PUT(HDRP(bp), PACK(csize, 1));
         PUT(FTRP(bp), PACK(csize, 1));
-        delete_freenode(bp);
     }
 }
 
@@ -250,7 +249,7 @@ static void *find_fit(size_t asize)
     for (int i = class; i < NUM_FREELIST; i++)
     {
         void *root = getroot(i);
-        /* first fit search */
+
         // 가용 리스트 앞에서부터 탐색
         for (bp = root; bp != NULL; bp = (char *)*NEXTP(bp))
         {
@@ -264,7 +263,7 @@ static void *find_fit(size_t asize)
     }
 
     dbg_printf("NOT FOUND :(\n");
-    return NULL; /* no fit */
+    return NULL;
 }
 
 // 연결
@@ -327,12 +326,35 @@ static void *coalesce(void *bp)
 // 가용 블록 삭제
 static void delete_freenode(void *bp)
 {
-    void *next_free_block_addr = (void *)*NEXTP(bp);
-    void *prev_free_block_addr = (void *)*PREVP(bp);
-    PUT_ADDR(NEXTP(prev_free_block_addr), next_free_block_addr);
-    if (next_free_block_addr != NULL)
+    size_t size = GET_SIZE(HDRP(bp));
+    void *root = getroot(getclass(size));
+
+    void *next_free_block = (void *)*NEXTP(bp);
+    void *prev_free_block = (void *)*PREVP(bp);
+
+    if (next_free_block != NULL)
     {
-        PUT_ADDR(PREVP(next_free_block_addr), prev_free_block_addr);
+        if (prev_free_block != NULL)
+        { // 중간에서 삭제
+            PUT_ADDR(NEXTP(prev_free_block), next_free_block);
+            PUT_ADDR(PREVP(next_free_block), prev_free_block);
+        }
+        else
+        { // 리스트 처음에서 삭제
+            PUT_ADDR(NEXTP(root), next_free_block);
+            PUT_ADDR(PREVP(next_free_block), NULL);
+        }
+    }
+    else
+    {
+        if (prev_free_block != NULL)
+        { // 리스트 마지막에서 삭제
+            PUT_ADDR(NEXTP(prev_free_block), NULL);
+        }
+        else
+        { // 마지막 블록 삭제
+            PUT_ADDR(NEXTP(root), NULL);
+        }
     }
 }
 
@@ -341,14 +363,51 @@ static void insert_freenode(void *bp)
 {
     size_t size = GET_SIZE(HDRP(bp));
     void *root = getroot(getclass(size));
-    void *next_free_block_addr = (void *)*NEXTP(root);
-    PUT_ADDR(NEXTP(bp), *NEXTP(root));
-    PUT_ADDR(PREVP(bp), root);
 
-    PUT_ADDR(NEXTP(root), bp);
-    if (next_free_block_addr != NULL)
+    void *cur_free_block = (void *)*NEXTP(root);
+    void *prev_free_block = NULL;
+
+    while (cur_free_block != NULL && size > GET_SIZE(HDRP(cur_free_block)))
     {
-        PUT_ADDR(PREVP(next_free_block_addr), bp);
+        prev_free_block = cur_free_block;
+        cur_free_block = (void *)*NEXTP(cur_free_block);
+    }
+
+    if (cur_free_block != NULL)
+    {
+        if (prev_free_block != NULL)
+        { // 리스트 중간에 삽입
+            PUT_ADDR(NEXTP(bp), cur_free_block);
+            PUT_ADDR(PREVP(bp), prev_free_block);
+
+            PUT_ADDR(NEXTP(prev_free_block), bp);
+            PUT_ADDR(PREVP(cur_free_block), bp);
+        }
+        else
+        { // 리스트 처음에 삽입
+            PUT_ADDR(NEXTP(bp), cur_free_block);
+            PUT_ADDR(PREVP(bp), NULL);
+
+            PUT_ADDR(PREVP(cur_free_block), bp);
+            PUT_ADDR(NEXTP(root), bp);
+        }
+    }
+    else
+    {
+        if (prev_free_block != NULL)
+        { // 리스트 마지막에 삽입
+            PUT_ADDR(NEXTP(bp), NULL);
+            PUT_ADDR(PREVP(bp), prev_free_block);
+
+            PUT_ADDR(NEXTP(prev_free_block), bp);
+        }
+        else
+        { // 빈 리스트에 삽입
+            PUT_ADDR(NEXTP(bp), NULL);
+            PUT_ADDR(PREVP(bp), NULL);
+
+            PUT_ADDR(NEXTP(root), bp);
+        }
     }
 }
 
